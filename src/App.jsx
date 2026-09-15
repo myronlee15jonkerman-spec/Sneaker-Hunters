@@ -34,7 +34,6 @@ const FONTS = `
 
 const CATEGORIES = ["All", "Basketball", "Lifestyle", "Running"];
 
-// Maps each database "slug" to the matching local photo import
 const IMAGES = {
   "af1-white": airforce1,
   "p6000-silver": p6000,
@@ -452,7 +451,7 @@ function CheckoutView({ items, subtotal, onBack, onPlaceOrder }) {
             </div>
           </div>
 
-          <p style={{ ...sectionLabel, marginTop: 26 }}>Payment (prototype — no real charge)</p>
+          <p style={{ ...sectionLabel, marginTop: 26 }}>Payment (test mode)</p>
           <Field label="Card number" value={form.card} onChange={(e) => update("card", e.target.value)} placeholder="4242 4242 4242 4242" />
           {errors.card && <ErrorText t={errors.card} />}
           <div style={{ display: "flex", gap: 12 }}>
@@ -614,6 +613,45 @@ export default function App() {
     loadProducts();
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get("payment");
+
+    if (paymentStatus === "success") {
+      const pending = localStorage.getItem("pendingOrder");
+      if (pending) {
+        const { form, items, total } = JSON.parse(pending);
+        (async () => {
+          const id = "SH-" + Math.floor(100000 + Math.random() * 900000);
+          const { error } = await supabase.from("orders").insert([
+            {
+              order_number: id,
+              customer_name: form.name,
+              customer_email: form.email,
+              address: form.address,
+              city: form.city,
+              zip: form.zip,
+              total: total,
+              items: JSON.stringify(items),
+            },
+          ]);
+          if (!error) {
+            setOrder({ id, form, items, total });
+            setView("confirm");
+          } else {
+            console.error(error);
+          }
+          localStorage.removeItem("pendingOrder");
+          window.history.replaceState({}, "", window.location.pathname);
+        })();
+      }
+    } else if (paymentStatus === "cancelled" || paymentStatus === "failed") {
+      localStorage.removeItem("pendingOrder");
+      window.history.replaceState({}, "", window.location.pathname);
+      alert("Payment was not completed. Your cart is still saved.");
+    }
+  }, []);
+
   const filtered = useMemo(
     () => (category === "All" ? products : products.filter((p) => p.category === category)),
     [category, products]
@@ -644,31 +682,35 @@ export default function App() {
   }
 
   async function placeOrder(form, total) {
-    const id = "SH-" + Math.floor(100000 + Math.random() * 900000);
+    try {
+      const response = await fetch(
+        "https://stabutfvkrxbglgjkelk.supabase.co/functions/v1/create-yoco-checkout",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amountInCents: Math.round(total * 100),
+            currency: "ZAR",
+            successUrl: window.location.origin + "?payment=success",
+            cancelUrl: window.location.origin + "?payment=cancelled",
+            failureUrl: window.location.origin + "?payment=failed",
+          }),
+        }
+      );
 
-    const { error } = await supabase.from("orders").insert([
-      {
-        order_number: id,
-        customer_name: form.name,
-        customer_email: form.email,
-        address: form.address,
-        city: form.city,
-        zip: form.zip,
-        items: JSON.stringify(
-          cart.map((it) => ({ name: it.name, size: it.size, qty: it.qty, price: it.price }))
-        ),
-        total: total,
-      },
-    ]);
+      const data = await response.json();
 
-    if (error) {
-      alert("Something went wrong saving your order: " + error.message);
-      return;
+      if (data.redirectUrl) {
+        localStorage.setItem("pendingOrder", JSON.stringify({ form, items: cart, total }));
+        window.location.href = data.redirectUrl;
+      } else {
+        alert("Something went wrong starting the payment. Please try again.");
+        console.error(data);
+      }
+    } catch (error) {
+      alert("Something went wrong starting the payment. Please try again.");
+      console.error(error);
     }
-
-    setOrder({ id, form, items: cart, total });
-    setCart([]);
-    setView("confirm");
   }
 
   return (
